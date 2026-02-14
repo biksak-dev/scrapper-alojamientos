@@ -27,6 +27,8 @@ app.post('/scrape', async (req, res) => {
     try {
         browser = await puppeteer.launch({
             headless: "new",
+            // Esto le dice: "Usa la ruta que te de el sistema, o busca la de Puppeteer"
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null, 
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
