@@ -5,35 +5,31 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const path = require('path');
 
-// Configuración anti-bloqueo
+// Activar plugin de sigilo
 puppeteer.use(StealthPlugin());
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-// Servir archivos estáticos (Frontend)
-app.use(express.static(path.join(__dirname, 'public')));
+// CONFIGURACIÓN DE RUTAS ESTÁTICAS
+const publicPath = path.resolve(__dirname, 'public');
+console.log('Ruta de archivos públicos:', publicPath);
 
-// Ruta principal
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
+// Servir archivos estáticos
+app.use(express.static(publicPath));
 
-// Endpoint del Scraper
+// ENDPOINT DEL SCRAPER
 app.post('/scrape', async (req, res) => {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL requerida' });
 
-    console.log(`Procesando URL: ${url}`);
+    console.log(`Scrapeando URL: ${url}`);
     
     let browser;
     try {
-        // Lanzar navegador optimizado para Railway/Docker
         browser = await puppeteer.launch({
             headless: "new",
-            // ESTA LÍNEA ES LA CLAVE:
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath(),
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -45,7 +41,6 @@ app.post('/scrape', async (req, res) => {
 
         const page = await browser.newPage();
         
-        // Bloquear recursos pesados para ahorrar memoria
         await page.setRequestInterception(true);
         page.on('request', (req) => {
             if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
@@ -55,87 +50,58 @@ app.post('/scrape', async (req, res) => {
             }
         });
 
-        // Navegar a la URL (Timeout 60s)
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-        // Extraer datos
         const data = await page.evaluate(() => {
-            // Funciones de ayuda internas
-            const parsePrice = (text) => {
-                if (!text) return 0;
-                const clean = text.replace(/[^0-9,.]/g, '');
+            const cleanPrice = (txt) => {
+                if (!txt) return 0;
+                const clean = txt.replace(/[^0-9,.]/g, '');
                 if (!clean) return 0;
-                let num = parseFloat(clean.replace(/\./g, '').replace(/,/g, '.'));
-                // Corrección para miles si el formato es distinto
-                if (num < 100 && clean.length > 4) num = parseFloat(clean.replace(/,/g, ''));
-                return num;
+                let val = parseFloat(clean.replace(/\./g, '').replace(/,/g, '.'));
+                if (val < 100 && clean.length > 4) val = parseFloat(clean.replace(/,/g, ''));
+                return val;
             };
 
-            const isStrikethrough = (element) => {
-                const style = window.getComputedStyle(element);
-                return style.textDecorationLine.includes('line-through') || element.tagName === 'DEL';
+            const isStrikethrough = (el) => {
+                const style = window.getComputedStyle(el);
+                return style.textDecorationLine.includes('line-through') || el.tagName === 'DEL';
             };
 
             const title = document.title;
             const bodyText = document.body.innerText.toLowerCase();
-
-            // Tipo de alojamiento
+            
             let type = 'Alojamiento';
             if (title.toLowerCase().includes('hotel')) type = 'Hotel';
             else if (title.toLowerCase().includes('hostal') || title.toLowerCase().includes('hostel')) type = 'Hostal';
-            else if (title.toLowerCase().includes('apartamento') || title.toLowerCase().includes('depto')) type = 'Apartamento';
-            else if (title.toLowerCase().includes('casa') || title.toLowerCase().includes('villa')) type = 'Casa';
+            else if (title.toLowerCase().includes('apartamento')) type = 'Apartamento';
+            else if (title.toLowerCase().includes('casa')) type = 'Casa';
 
-            // Ubicación
-            let location = 'Ver en mapa';
+            let location = 'Ver mapa';
             const locEl = document.querySelector('.hp_address_subtitle, [data-node_tt_id="location_score_tooltip"], h1, ._152qbzi');
             if (locEl) location = locEl.innerText.trim();
 
-            // Piscina
-            const hasPool = bodyText.includes('piscina') || bodyText.includes('pool') || bodyText.includes('alberca');
+            const hasPool = bodyText.includes('piscina') || bodyText.includes('pool');
 
-            // Precio inteligente
             let finalPrice = 0;
-            
-            // Intento 1: Booking directo
-            const bookingPriceEl = document.querySelector('[data-testid="price-and-discounted-price"]');
-            
-            if (bookingPriceEl) {
-                finalPrice = parsePrice(bookingPriceEl.innerText);
+            const bookingEl = document.querySelector('[data-testid="price-and-discounted-price"]');
+            if (bookingEl) {
+                finalPrice = cleanPrice(bookingEl.innerText);
             } else {
-                // Intento 2: Búsqueda genérica
-                const allPriceElements = Array.from(document.querySelectorAll('span, div, p'));
-                const candidates = allPriceElements.filter(el => {
-                    const text = el.innerText;
-                    return (text.includes('$') || text.includes('€') || text.includes('COP')) && 
-                           /\d/.test(text) && 
-                           text.length < 30 && 
-                           !isStrikethrough(el);
+                const elements = Array.from(document.querySelectorAll('span, div, p'));
+                const candidates = elements.filter(el => {
+                    const txt = el.innerText;
+                    return (txt.includes('$') || txt.includes('€') || txt.includes('COP')) && 
+                           /\d/.test(txt) && !isStrikethrough(el);
                 });
-
-                // Buscar la palabra "Total" cerca
-                let totalCandidate = candidates.find(el => {
-                    const parentText = el.parentElement ? el.parentElement.innerText.toLowerCase() : '';
-                    return parentText.includes('total');
-                });
-
-                if (totalCandidate) {
-                    finalPrice = parsePrice(totalCandidate.innerText);
-                } else if (candidates.length > 0) {
-                    // Si no hay total explícito, tomar el valor más alto no tachado
-                    const prices = candidates.map(el => parsePrice(el.innerText));
-                    finalPrice = Math.max(...prices);
+                const totalEl = candidates.find(el => el.parentElement?.innerText.toLowerCase().includes('total'));
+                if (totalEl) finalPrice = cleanPrice(totalEl.innerText);
+                else if (candidates.length > 0) {
+                    const vals = candidates.map(c => cleanPrice(c.innerText));
+                    finalPrice = Math.max(...vals);
                 }
             }
 
-            return {
-                url: document.location.href,
-                title,
-                type,
-                location,
-                totalPrice: finalPrice || 0,
-                hasPool: hasPool ? 'Sí' : 'No'
-            };
+            return { url: document.location.href, title, type, location, totalPrice: finalPrice, hasPool: hasPool ? 'Sí' : 'No' };
         });
 
         await browser.close();
@@ -143,12 +109,18 @@ app.post('/scrape', async (req, res) => {
 
     } catch (error) {
         if(browser) await browser.close();
-        console.error("Error scraping:", error);
-        res.status(500).json({ error: 'Error al procesar la URL.' });
+        res.status(500).json({ error: 'Error en el servidor' });
     }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Servidor corriendo en puerto ${PORT}`);
+// CAPTURA CUALQUIER OTRA RUTA Y SIRVE EL INDEX.HTML
+app.get('*', (req, res) => {
+    res.sendFile(path.join(publicPath, 'index.html'));
+});
+
+// CONFIGURACIÓN DEL PUERTO PARA RAILWAY (8080)
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Servidor escuchando en puerto ${PORT}`);
+    console.log(`Sirviendo archivos desde: ${publicPath}`);
 });
