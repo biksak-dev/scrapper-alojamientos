@@ -10,54 +10,57 @@ puppeteer.use(StealthPlugin());
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
-
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.post('/scrape', async (req, res) => {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL requerida' });
 
-    console.log(`--- Analizando URL: ${url} ---`);
-    
+    console.log(`--- Iniciando Scraper para: ${url} ---`);
     let browser;
+
     try {
         browser = await puppeteer.launch({
             headless: "new",
-            // Esta es la ruta exacta donde nixpacks instala chromium
-            executablePath: '/usr/bin/chromium',
+            // IMPORTANTE: No definimos executablePath manual.
+            // La imagen de Docker ya configuró la variable de entorno automáticamente.
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
+                '--disable-dev-shm-usage', // Vital para evitar crashes de memoria
                 '--single-process', 
                 '--no-zygote'
             ]
         });
 
         const page = await browser.newPage();
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        
+        // Fingimos ser un usuario normal
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36');
 
-        // Tiempo de espera para que cargue el contenido dinámico de Airbnb/Booking
-        await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+        // Timeout generoso
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        
+        // Espera de seguridad
+        await new Promise(r => setTimeout(r, 2000));
 
         const data = await page.evaluate(() => {
-            const title = document.title;
-            // Selector genérico de precios para empezar
-            const price = document.querySelector('[data-testid="price-and-discounted-price"], ._tyxjp1')?.innerText || "Precio no detectado";
+            const priceEl = document.querySelector('[data-testid="price-and-discounted-price"], ._tyxjp1, span._1y74zjx');
+            const titleEl = document.querySelector('h1');
             
             return {
                 url: document.location.href,
-                title: title.split('-')[0].trim(),
-                totalPrice: price
+                title: titleEl ? titleEl.innerText : document.title,
+                totalPrice: priceEl ? priceEl.innerText : "Precio no encontrado"
             };
         });
 
+        console.log("✅ Datos extraídos:", data);
         await browser.close();
-        console.log("✅ Análisis exitoso");
         res.json(data);
 
     } catch (e) {
-        console.error("❌ Error en scraper:", e.message);
+        console.error("❌ Error:", e.message);
         if (browser) await browser.close();
         res.status(500).json({ error: 'Error: ' + e.message });
     }
@@ -66,4 +69,4 @@ app.post('/scrape', async (req, res) => {
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor en puerto ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Servidor listo en puerto ${PORT}`));
