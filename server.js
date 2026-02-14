@@ -32,10 +32,12 @@ app.post('/scrape', async (req, res) => {
         // Lanzar navegador optimizado para Railway/Docker
         browser = await puppeteer.launch({
             headless: "new",
+            // ESTA LÍNEA ES LA CLAVE:
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath(),
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage', // Vital para evitar crashes de memoria
+                '--disable-dev-shm-usage',
                 '--single-process', 
                 '--no-zygote'
             ]
