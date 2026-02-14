@@ -12,19 +12,19 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-// CONFIGURACIÓN DE RUTAS ESTÁTICAS
-const publicPath = path.resolve(__dirname, 'public');
-console.log('Ruta de archivos públicos:', publicPath);
+// --- CONFIGURACIÓN DE RUTAS ---
+// Usamos path.join con __dirname para asegurar que Railway encuentre la carpeta 'public'
+const publicPath = path.join(__dirname, 'public');
 
-// Servir archivos estáticos
+// 1. Servir archivos estáticos (CSS, JS, imágenes dentro de public)
 app.use(express.static(publicPath));
 
-// ENDPOINT DEL SCRAPER
+// 2. Ruta para el Scraper
 app.post('/scrape', async (req, res) => {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL requerida' });
 
-    console.log(`Scrapeando URL: ${url}`);
+    console.log(`Analizando URL: ${url}`);
     
     let browser;
     try {
@@ -41,6 +41,7 @@ app.post('/scrape', async (req, res) => {
 
         const page = await browser.newPage();
         
+        // Optimización de carga
         await page.setRequestInterception(true);
         page.on('request', (req) => {
             if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
@@ -72,9 +73,8 @@ app.post('/scrape', async (req, res) => {
             
             let type = 'Alojamiento';
             if (title.toLowerCase().includes('hotel')) type = 'Hotel';
-            else if (title.toLowerCase().includes('hostal') || title.toLowerCase().includes('hostel')) type = 'Hostal';
+            else if (title.toLowerCase().includes('hostal')) type = 'Hostal';
             else if (title.toLowerCase().includes('apartamento')) type = 'Apartamento';
-            else if (title.toLowerCase().includes('casa')) type = 'Casa';
 
             let location = 'Ver mapa';
             const locEl = document.querySelector('.hp_address_subtitle, [data-node_tt_id="location_score_tooltip"], h1, ._152qbzi');
@@ -90,8 +90,7 @@ app.post('/scrape', async (req, res) => {
                 const elements = Array.from(document.querySelectorAll('span, div, p'));
                 const candidates = elements.filter(el => {
                     const txt = el.innerText;
-                    return (txt.includes('$') || txt.includes('€') || txt.includes('COP')) && 
-                           /\d/.test(txt) && !isStrikethrough(el);
+                    return (txt.includes('$') || txt.includes('€') || txt.includes('COP')) && /\d/.test(txt) && !isStrikethrough(el);
                 });
                 const totalEl = candidates.find(el => el.parentElement?.innerText.toLowerCase().includes('total'));
                 if (totalEl) finalPrice = cleanPrice(totalEl.innerText);
@@ -109,18 +108,20 @@ app.post('/scrape', async (req, res) => {
 
     } catch (error) {
         if(browser) await browser.close();
-        res.status(500).json({ error: 'Error en el servidor' });
+        console.error(error);
+        res.status(500).json({ error: 'Error en el scraper' });
     }
 });
 
-// CAPTURA CUALQUIER OTRA RUTA Y SIRVE EL INDEX.HTML
+// 3. CAPTURA TODAS LAS DEMÁS RUTAS (Fallback)
+// Esto asegura que si entras a la raíz /, el servidor entregue el index.html
 app.get('*', (req, res) => {
     res.sendFile(path.join(publicPath, 'index.html'));
 });
 
-// CONFIGURACIÓN DEL PUERTO PARA RAILWAY (8080)
+// --- INICIO DEL SERVIDOR ---
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Servidor escuchando en puerto ${PORT}`);
-    console.log(`Sirviendo archivos desde: ${publicPath}`);
+    console.log(`Servidor activo en puerto ${PORT}`);
+    console.log(`Buscando archivos en: ${publicPath}`);
 });
