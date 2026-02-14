@@ -5,134 +5,96 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const path = require('path');
 
-// Activar plugin de sigilo para evitar bloqueos
 puppeteer.use(StealthPlugin());
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-// CONFIGURACIÓN DE RUTAS ESTÁTICAS
 const publicPath = path.join(__dirname, 'public');
 app.use(express.static(publicPath));
 
-// ENDPOINT DEL SCRAPER
 app.post('/scrape', async (req, res) => {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL requerida' });
 
-    console.log(`Analizando URL: ${url}`);
+    console.log(`Iniciando scraper para: ${url}`);
     
     let browser;
     try {
+        // CONFIGURACIÓN AUTOMÁTICA
+        // Eliminamos executablePath para que Puppeteer lo detecte solo
         browser = await puppeteer.launch({
             headless: "new",
-            // Esto le dice: "Usa la ruta que te de el sistema, o busca la de Puppeteer"
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null, 
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--single-process', 
-                '--no-zygote',
-                '--disable-gpu'
+                '--no-zygote'
             ]
         });
 
         const page = await browser.newPage();
-        
-        // Simular un navegador real
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36');
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
         await page.setRequestInterception(true);
         page.on('request', (req) => {
-            if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
+            if (['image', 'font', 'media'].includes(req.resourceType())) {
                 req.abort();
             } else {
                 req.continue();
             }
         });
 
-        await page.goto(url, { 
-            waitUntil: 'domcontentloaded', 
-            timeout: 90000 
-        });
-
-        // Espera de cortesía para contenido dinámico
-        await new Promise(r => setTimeout(r, 2000));
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await new Promise(r => setTimeout(r, 3000));
 
         const data = await page.evaluate(() => {
-            const cleanPrice = (txt) => {
-                if (!txt) return 0;
-                const clean = txt.replace(/[^0-9,.]/g, '');
-                if (!clean) return 0;
-                let val = parseFloat(clean.replace(/\./g, '').replace(/,/g, '.'));
-                if (val < 100 && clean.length > 4) val = parseFloat(clean.replace(/,/g, ''));
-                return val;
+            const cleanP = (t) => {
+                if (!t) return 0;
+                const c = t.replace(/[^0-9,.]/g, '');
+                if (!c) return 0;
+                let v = parseFloat(c.replace(/\./g, '').replace(/,/g, '.'));
+                if (v < 100 && c.length > 4) v = parseFloat(c.replace(/,/g, ''));
+                return v;
             };
 
-            const isStrikethrough = (el) => {
-                const style = window.getComputedStyle(el);
-                return style.textDecorationLine.includes('line-through') || el.tagName === 'DEL';
-            };
+            const priceEl = document.querySelector('[data-testid="price-and-discounted-price"], .prco-valign-middle-helper, ._tyxjp1');
+            let price = priceEl ? cleanP(priceEl.innerText) : 0;
 
-            const title = document.title;
-            const bodyText = document.body.innerText.toLowerCase();
-            
-            let type = 'Alojamiento';
-            if (bodyText.includes('hotel')) type = 'Hotel';
-            else if (bodyText.includes('hostal')) type = 'Hostal';
-            else if (bodyText.includes('apartamento')) type = 'Apartamento';
-
-            let location = 'Ver mapa';
-            const locEl = document.querySelector('.hp_address_subtitle, [data-node_tt_id="location_score_tooltip"], h1, ._152qbzi, [data-testid="address"]');
-            if (locEl) location = locEl.innerText.trim();
-
-            const hasPool = bodyText.includes('piscina') || bodyText.includes('pool');
-
-            let finalPrice = 0;
-            const bookingEl = document.querySelector('[data-testid="price-and-discounted-price"], .prco-valign-middle-helper, ._tyxjp1');
-            
-            if (bookingEl) {
-                finalPrice = cleanPrice(bookingEl.innerText);
-            } else {
-                const elements = Array.from(document.querySelectorAll('span, div, p'));
-                const candidates = elements.filter(el => {
-                    const txt = el.innerText;
-                    return (txt.includes('$') || txt.includes('€') || txt.includes('COP')) && /\d/.test(txt) && !isStrikethrough(el);
-                });
-                if (candidates.length > 0) {
-                    const vals = candidates.map(c => cleanPrice(c.innerText));
-                    finalPrice = Math.max(...vals);
+            if (price === 0) {
+                const spans = Array.from(document.querySelectorAll('span, div'));
+                const filtered = spans.filter(s => s.innerText.includes('$') || s.innerText.includes('COP'));
+                if (filtered.length > 0) {
+                    const prices = filtered.map(f => cleanP(f.innerText));
+                    price = Math.max(...prices);
                 }
             }
 
-            return { 
-                url: document.location.href, 
-                title: title.split('-')[0].trim(), 
-                type, 
-                location, 
-                totalPrice: finalPrice, 
-                hasPool: hasPool ? 'Sí' : 'No' 
+            return {
+                url: document.location.href,
+                title: document.title.split('-')[0].trim(),
+                location: document.querySelector('[data-testid="address"], .hp_address_subtitle')?.innerText.trim() || "Ver mapa",
+                totalPrice: price,
+                hasPool: document.body.innerText.toLowerCase().includes('piscina') ? 'Sí' : 'No'
             };
         });
 
         await browser.close();
         res.json(data);
 
-    } catch (error) {
+    } catch (e) {
         if(browser) await browser.close();
-        res.status(500).json({ error: 'Error en el scraper: ' + error.message });
+        res.status(500).json({ error: 'Error: ' + e.message });
     }
 });
 
-// FALLBACK PARA SERVIR EL HTML
 app.get('*', (req, res) => {
     res.sendFile(path.join(publicPath, 'index.html'));
 });
 
-// PUERTO PARA RAILWAY
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Servidor activo en puerto ${PORT}`);
+    console.log(`Servidor en puerto ${PORT}`);
 });
